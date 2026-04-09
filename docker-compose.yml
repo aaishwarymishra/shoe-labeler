@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  labeling-tool:
+    image: blankyy/labeling-tool:latest
+    ports:
+      - "8080:80"
+    restart: unless-stopped
