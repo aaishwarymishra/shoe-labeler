@@ -35,6 +35,22 @@ function Badge({ ok, label }) {
   return <span className={`badge ${ok ? "ok" : "warn"}`}>{label}</span>;
 }
 
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const href = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.style.display = "none";
+
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  window.setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
+
 function App() {
   const [videoUrl, setVideoUrl] = useState("");
   const [videoUrlInput, setVideoUrlInput] = useState("");
@@ -73,6 +89,7 @@ function App() {
 
   const videoRef = useRef(null);
   const sessionInputRef = useRef(null);
+  const labelsInputRef = useRef(null);
   const lastAutosaveContentRef = useRef("");
   const autosaveWarningRef = useRef("");
 
@@ -479,25 +496,67 @@ function App() {
   }
 
   function saveProgress() {
-    const payload = buildSessionPayload();
-    const serialized = JSON.stringify(payload);
-
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = "step_session.json";
-    a.click();
-    URL.revokeObjectURL(href);
     try {
+      const payload = buildSessionPayload();
+      const serialized = JSON.stringify(payload);
+
+      downloadJsonFile("step_session.json", payload);
+
       localStorage.setItem(LOCAL_DRAFT_KEY, serialized);
       lastAutosaveContentRef.current = serialized;
       autosaveWarningRef.current = "";
-    } catch {
-      // manual save still succeeds
+
+      setLastSavedAt(payload.savedAt);
+      setStatus(`Progress saved at ${new Date(payload.savedAt).toLocaleString()}.`);
+      setError("");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to save progress file.");
+      setStatus("Save progress failed.");
     }
-    setLastSavedAt(payload.savedAt);
-    setStatus(`Progress saved at ${new Date(payload.savedAt).toLocaleString()}.`);
+  }
+
+  function openLabelsPicker() {
+    labelsInputRef.current?.click();
+  }
+
+  async function onLabelsSelected(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+
+      const rawLabels = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.labels)
+          ? parsed.labels
+          : Array.isArray(parsed?.state?.labels)
+            ? parsed.state.labels
+            : null;
+
+      if (!rawLabels) {
+        throw new Error("Invalid labels file");
+      }
+
+      const restoredLabels = dedupeLabels(rawLabels.filter((l) => {
+        return l && typeof l === "object" && Number.isFinite(Number(l.time)) && (l.sensor === "left" || l.sensor === "right");
+      }));
+
+      setLabels(restoredLabels);
+      setUndoStack([]);
+      setRedoStack([]);
+
+      if (typeof parsed?.channel === "string") setChannel(parsed.channel);
+      if (Number.isFinite(Number(parsed?.snapRadiusSec))) setSnapRadius(Number(parsed.snapRadiusSec));
+      if (Number.isFinite(Number(parsed?.snapRadius))) setSnapRadius(Number(parsed.snapRadius));
+
+      setStatus(`Imported ${restoredLabels.length} labels from ${file.name}.`);
+      setError("");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to import labels file.");
+      setStatus("Labels import failed.");
+    }
   }
 
   function openProgressPicker() {
@@ -526,13 +585,14 @@ function App() {
       labels: deduped
     };
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = "step_labels.json";
-    a.click();
-    URL.revokeObjectURL(href);
+    try {
+      downloadJsonFile("step_labels.json", payload);
+      setError("");
+    } catch (err) {
+      console.error(err);
+      setError("Failed to export labels file.");
+      setStatus("Export failed.");
+    }
   }
 
   function seekBy(delta) {
@@ -738,9 +798,10 @@ function App() {
             <button onClick={() => seekBy(0.1)}>+0.1s</button>
           </div>
           <div className="controls compact" style={{ marginTop: 8 }}>
-            <button onClick={saveProgress} disabled={!labels.length}>Save Progress</button>
+            <button onClick={saveProgress}>Save Progress</button>
             <button onClick={openProgressPicker}>Load Progress</button>
             <button onClick={exportLabels} disabled={!labels.length}>Export JSON</button>
+            <button onClick={openLabelsPicker}>Import Labels JSON</button>
             <button className="danger" onClick={resetLabels} disabled={!labels.length}>Reset Labels</button>
             <button onClick={clearLocalDraft}>Clear Local Draft</button>
             <input
@@ -749,6 +810,13 @@ function App() {
               accept=".json,application/json"
               style={{ display: "none" }}
               onChange={(e) => onProgressSelected(e.target.files?.[0])}
+            />
+            <input
+              ref={labelsInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: "none" }}
+              onChange={(e) => onLabelsSelected(e.target.files?.[0])}
             />
           </div>
 
